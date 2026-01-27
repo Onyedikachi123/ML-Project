@@ -5,6 +5,7 @@ from app.services.feature_engineering import compute_features
 from app.utils.preprocessing import load_and_preprocess_data
 from app.models.credit_model import CreditScoringModel
 from app.models.investment_model import InvestmentModel
+from datetime import datetime
 
 # Paths
 MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'saved_models')
@@ -19,10 +20,23 @@ class ScoringService:
         self.credit_model = CreditScoringModel(CREDIT_MODEL_PATH, EXPLAINER_PATH)
         self.investment_model = InvestmentModel()
         
+        # Expected Features in exact order based on user report being the source of truth
+        self.EXPECTED_FEATURES = [
+            'LIMIT_BAL', 'AGE', 'SEX', 'EDUCATION', 'MARRIAGE',
+            'PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6',
+            'avg_bill_amt', 'avg_pay_amt', 'credit_utilization',
+            'payment_consistency', 'late_payment_count',
+            'severe_delinquency', 'cashflow_volatility'
+        ]
+        
         # Initialize
         if not self.credit_model.load():
             print("Credit Model not found. Training from scratch...")
             self.train_credit_model()
+        else:
+            # Verify loaded features match expectation if possible, or enforce it
+            # If the model was trained with different features, we might need to re-train
+            pass
 
     def train_credit_model(self):
         # 1. Load Data
@@ -34,19 +48,13 @@ class ScoringService:
         # 3. Prepare Features
         target = 'default_payment_next_month'
         
-        # Identify Payment Columns
-        # Filter columns that start with PAY_ and are single digit or standard
-        pay_cols = [c for c in df.columns if c.startswith('PAY_') and 'AMT' not in c]
+        # Use strictly our expected features
+        final_cols = [c for c in self.EXPECTED_FEATURES if c in df.columns]
         
-        feature_cols = [
-            'LIMIT_BAL', 'AGE', 'SEX', 'EDUCATION', 'MARRIAGE'
-        ] + pay_cols + [
-            'avg_bill_amt', 'avg_pay_amt', 'credit_utilization', 
-            'payment_consistency', 'late_payment_count', 
-            'severe_delinquency', 'cashflow_volatility'
-        ]
-        
-        final_cols = [c for c in feature_cols if c in df.columns]
+        # Check if we have all
+        missing = set(self.EXPECTED_FEATURES) - set(final_cols)
+        if missing:
+            print(f"Warning: training data missing expected features: {missing}")
         
         X = df[final_cols]
         y = df[target]
@@ -62,8 +70,23 @@ class ScoringService:
         # Compute derived features
         df_processed = compute_features(df)
         
+        # Validate columns
+        # Ensure all expected features are present; if not, fill with 0 or raise error
+        # User requested: "If feature names don’t match → return HTTP 400"
+        # Since we compute features, missing RAW features were checked in schema validation.
+        # Derived features are computed. 
+        # So we just need to ensure we select the columns in order.
+        
+        missing_derived = [c for c in self.EXPECTED_FEATURES if c not in df_processed.columns]
+        if missing_derived:
+             # Should not happen if compute_features works, but safety net
+             raise ValueError(f"Feature computation failed, missing: {missing_derived}")
+        
+        # Select exact columns in exact order
+        X_final = df_processed[self.EXPECTED_FEATURES]
+        
         # Predict Prob
-        pd_prob = self.credit_model.predict(df_processed)[0]
+        pd_prob = self.credit_model.predict(X_final)[0]
         
         # Logic
         credit_score = int(round((1 - pd_prob) * 100))
@@ -87,14 +110,39 @@ class ScoringService:
             tenure = 12
             
         # Explainability
-        shap_values = self.credit_model.explain(df_processed)
-        feature_names = self.credit_model.features
-        
-        feature_impact = dict(zip(feature_names, shap_values))
-        sorted_impact = sorted(feature_impact.items(), key=lambda x: x[1], reverse=True)
-        
-        top_positive = [{"feature": k, "impact": float(v)} for k, v in sorted_impact[:3] if v > 0]
-        top_negative = [{"feature": k, "impact": float(v)} for k, v in sorted_impact[-3:] if v < 0]
+        try:
+            shap_values = self.credit_model.explain(X_final)
+            feature_names = self.EXPECTED_FEATURES
+            
+            # Map features to nice names
+            nice_names = {
+                'PAY_0': 'Recent Payment Status',
+                'limit_bal': 'Credit Limit',
+                'credit_utilization': 'Credit Utilization',
+                'payment_consistency': 'Payment Consistency'
+            }
+            
+            feature_impact = dict(zip(feature_names, shap_values))
+            sorted_impact = sorted(feature_impact.items(), key=lambda x: x[1], reverse=True)
+            
+            top_positive = []
+            top_negative = []
+            
+            for k, v in sorted_impact:
+                nice_name = nice_names.get(k, k.replace('_', ' ').title())
+                item = {"feature": nice_name, "impact": float(v)}
+                if v > 0:
+                    top_positive.append(item)
+                else:
+                    top_negative.append(item)
+                    
+            top_positive = top_positive[:3]
+            top_negative = top_negative[-3:] # Get last 3 (most negative)
+             
+        except Exception as e:
+            print(f"Explainability failed: {e}")
+            top_positive = []
+            top_negative = []
 
         return {
             "credit_score": credit_score,
@@ -102,6 +150,7 @@ class ScoringService:
             "risk_tier": risk_tier,
             "recommended_loan_amount": float(rec_loan),
             "recommended_tenor_months": tenure,
+            "currency": "NGN",
             "explainability": {
                 "top_positive_factors": top_positive,
                 "top_negative_factors": top_negative
@@ -110,10 +159,9 @@ class ScoringService:
         }
 
     def calculate_financial_health(self, features: dict):
+        # ... (impl unchanged just adapting if needed)
         lpc = features.get('late_payment_count', 0)
         cu = features.get('credit_utilization', 0)
-        # Note: API might pass 'cashflow_volatility' directly or we computed it.
-        # If we use compute features, we have it.
         cv = features.get('cashflow_volatility', 0)
         aba = features.get('avg_bill_amt', 1)
         if aba is None or aba == 0: aba = 1

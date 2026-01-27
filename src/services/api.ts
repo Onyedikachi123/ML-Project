@@ -1,4 +1,16 @@
-export const API_BASE_URL = `${import.meta.env.VITE_API_URL}/api`;
+import axios from 'axios';
+
+// Use import.meta.env for Vite
+const API_URL = import.meta.env.VITE_API_URL || "https://ml-project-ksuh.onrender.com";
+export const API_BASE_URL = `${API_URL}/api`;
+
+// Create axios instance
+const apiClient = axios.create({
+    baseURL: API_BASE_URL,
+    headers: {
+        'Content-Type': 'application/json',
+    },
+});
 
 export interface CreditScoreRequest {
     LIMIT_BAL: number;
@@ -56,23 +68,32 @@ export interface AssetRecommendationResponse {
 
 export const api = {
     async getCreditScore(data: CreditScoreRequest): Promise<CreditScoreResponse> {
-        const response = await fetch(`${API_BASE_URL}/credit/score`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-        });
-        if (!response.ok) throw new Error('Failed to fetch credit score');
-        return response.json();
+        try {
+            console.log("Sending credit score request to:", `${API_BASE_URL}/credit/score`);
+            const response = await apiClient.post<CreditScoreResponse>('/credit/score', data);
+            return response.data;
+        } catch (error: any) {
+            console.error('Error fetching credit score:', error);
+            if (axios.isAxiosError(error)) {
+                const message = error.response?.data?.detail || error.message;
+                throw new Error(`Credit Score API Error: ${message}`);
+            }
+            throw new Error('Failed to fetch credit score');
+        }
     },
 
     async getFinancialHealth(data: CreditScoreRequest): Promise<FinancialHealthResponse> {
-        const response = await fetch(`${API_BASE_URL}/financial-health/score`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-        });
-        if (!response.ok) throw new Error('Failed to fetch financial health');
-        return response.json();
+        try {
+            const response = await apiClient.post<FinancialHealthResponse>('/financial-health/score', data);
+            return response.data;
+        } catch (error: any) {
+            console.error('Error fetching financial health:', error);
+            if (axios.isAxiosError(error)) {
+                const message = error.response?.data?.detail || error.message;
+                throw new Error(`Financial Health API Error: ${message}`);
+            }
+            throw new Error('Failed to fetch financial health');
+        }
     },
 
     async getAssetRecommendation(
@@ -84,12 +105,16 @@ export const api = {
             AGE: number;
         }
     ): Promise<AssetRecommendationResponse> {
-        const response = await fetch(`${API_BASE_URL}/asset-management/recommendation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-        });
-        if (!response.ok) throw new Error('Failed to fetch asset recommendation');
-        return response.json();
+        try {
+            const response = await apiClient.post<AssetRecommendationResponse>('/asset-management/recommendation', data);
+            return response.data;
+        } catch (error: any) {
+            console.error('Error fetching asset recommendation:', error);
+            if (axios.isAxiosError(error)) {
+                const message = error.response?.data?.detail || error.message;
+                throw new Error(`Asset Recommendation API Error: ${message}`);
+            }
+            throw new Error('Failed to fetch asset recommendation');
+        }
     },
 };
