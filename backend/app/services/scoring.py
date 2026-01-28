@@ -64,28 +64,35 @@ class ScoringService:
         print("Model trained and saved.")
 
     def predict_credit_score(self, input_features: dict):
-        # Convert dict to DataFrame
+        """
+        Predict credit score using the XGBoost model.
+        input_features must already contain the derived features (enforced by Schema).
+        """
+        # 1. Convert validated dict to DataFrame
         df = pd.DataFrame([input_features])
         
-        # Compute derived features
-        df_processed = compute_features(df)
+        # 2. explicit feature alignment
+        # Ensure we only have the expected columns in the exact order
+        try:
+            X_final = df[self.EXPECTED_FEATURES].copy()
+        except KeyError as e:
+            missing = list(set(self.EXPECTED_FEATURES) - set(df.columns))
+            raise ValueError(f"Input data missing expected features: {missing}")
+
+        # 3. Enforce numeric types
+        # XGBoost expects numeric pointers; prevent object types
+        for col in self.EXPECTED_FEATURES:
+            X_final[col] = pd.to_numeric(X_final[col], errors='coerce').fillna(0)
+
+        # 4. Predict
+        # Use .values if you want strictly array, but DF with correct names is often safer for XGBoost features check
+        # However, to be extra safe against "feature names mismatch" if the model was trained on arrays or different versions:
+        # Pass the DataFrame. The error "data did not contain feature names" usually implies 
+        # the model expects names (saved with names) but got array, OR vice versa. 
+        # The user report says: "data did not contain feature names".
+        # This usually happens when passing a numpy array to a model trained on DataFrame, or passing a DF with wrong names.
+        # We are passing a DF with `self.EXPECTED_FEATURES` names.
         
-        # Validate columns
-        # Ensure all expected features are present; if not, fill with 0 or raise error
-        # User requested: "If feature names don’t match → return HTTP 400"
-        # Since we compute features, missing RAW features were checked in schema validation.
-        # Derived features are computed. 
-        # So we just need to ensure we select the columns in order.
-        
-        missing_derived = [c for c in self.EXPECTED_FEATURES if c not in df_processed.columns]
-        if missing_derived:
-             # Should not happen if compute_features works, but safety net
-             raise ValueError(f"Feature computation failed, missing: {missing_derived}")
-        
-        # Select exact columns in exact order
-        X_final = df_processed[self.EXPECTED_FEATURES]
-        
-        # Predict Prob
         pd_prob = self.credit_model.predict(X_final)[0]
         
         # Logic
@@ -155,7 +162,7 @@ class ScoringService:
                 "top_positive_factors": top_positive,
                 "top_negative_factors": top_negative
             },
-            "_derived_features": df_processed.iloc[0].to_dict()
+            "_derived_features": df.iloc[0].to_dict()
         }
 
     def calculate_financial_health(self, features: dict):

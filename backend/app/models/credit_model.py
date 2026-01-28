@@ -57,10 +57,25 @@ class CreditScoringModel:
     
     def predict(self, X: pd.DataFrame):
         # Ensure column order matches training
-        X_ordered = X[self.features]
-        # predict_proba returns [prob_0, prob_1]
-        probs = self.model.predict_proba(X_ordered)
-        return probs[:, 1] # Return Prob(Default)
+        if not hasattr(self, 'features') or not self.features:
+             self.features = X.columns.tolist()
+             
+        try:
+             X_ordered = X[self.features]
+        except KeyError as e:
+             raise ValueError(f"Model expects features {self.features} but got {X.columns}")
+
+        # Use DMatrix with explicit feature names to ensure XGBoost accepts the input
+        # This resolves issues where the SKLearn wrapper complains about missing feature names in DataFrames
+        try:
+            dmat = xgb.DMatrix(X_ordered, feature_names=self.features)
+            probs = self.model.get_booster().predict(dmat)
+            return probs
+        except Exception as e:
+            # Fallback to standard predict_proba if direct booster access fails
+            print(f"Warning: Direct booster prediction failed: {e}. Retrying with wrapper.")
+            probs = self.model.predict_proba(X_ordered)
+            return probs[:, 1]
     
     def explain(self, X: pd.DataFrame):
         X_ordered = X[self.features]

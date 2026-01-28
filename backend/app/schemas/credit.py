@@ -1,37 +1,67 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+import pandas as pd
+from typing import Any, Dict
+from app.services.feature_engineering import compute_features
 
 class CreditScoreRequest(BaseModel):
-    # Demographics
+    # --- Raw Features that are also Model Features ---
     LIMIT_BAL: float = Field(..., description="Amount of given credit in NT dollars")
+    AGE: int = Field(..., description="Age in years")
     SEX: int = Field(..., description="1=Male, 2=Female")
     EDUCATION: int = Field(..., description="1=Graduate, 2=University, 3=High School, 4=Others")
     MARRIAGE: int = Field(..., description="1=Married, 2=Single, 3=Others")
-    AGE: int = Field(..., description="Age in years")
     
     # Repayment Status (Sept - April)
-    # The dataset uses PAY_0 for Sept, then PAY_2...PAY_6
-    PAY_0: int = Field(..., description="Repayment status in September (-1=pay duly, 1=payment delay for one month...)")
+    PAY_0: int = Field(..., description="Repayment status in September")
     PAY_2: int = Field(..., description="Repayment status in August")
     PAY_3: int = Field(..., description="Repayment status in July")
     PAY_4: int = Field(..., description="Repayment status in June")
     PAY_5: int = Field(..., description="Repayment status in May")
     PAY_6: int = Field(..., description="Repayment status in April")
     
-    # Bill Amounts
-    BILL_AMT1: float = Field(..., description="Bill statement in September")
-    BILL_AMT2: float = Field(..., description="Bill statement in August")
-    BILL_AMT3: float = Field(..., description="Bill statement in July")
-    BILL_AMT4: float = Field(..., description="Bill statement in June")
-    BILL_AMT5: float = Field(..., description="Bill statement in May")
-    BILL_AMT6: float = Field(..., description="Bill statement in April")
-    
-    # Payment Amounts
-    PAY_AMT1: float = Field(..., description="Amount paid in September")
-    PAY_AMT2: float = Field(..., description="Amount paid in August")
-    PAY_AMT3: float = Field(..., description="Amount paid in July")
-    PAY_AMT4: float = Field(..., description="Amount paid in June")
-    PAY_AMT5: float = Field(..., description="Amount paid in May")
-    PAY_AMT6: float = Field(..., description="Amount paid in April")
+    # --- Derived Features (Required by Model) ---
+    # We require these to be present in the final object, but we compute them from input if missing.
+    avg_bill_amt: float = Field(..., description="Average bill amount")
+    avg_pay_amt: float = Field(..., description="Average payment amount")
+    credit_utilization: float = Field(..., description="Credit utilization ratio")
+    payment_consistency: float = Field(..., description="Payment consistency ratio")
+    late_payment_count: int = Field(..., description="Count of late payments")
+    severe_delinquency: int = Field(..., description="Flag for severe delinquency")
+    cashflow_volatility: float = Field(..., description="Standard deviation of bill amounts")
+
+    @model_validator(mode='before')
+    @classmethod
+    def compute_derived_features(cls, data: Any) -> Any:
+        """
+        Accepts raw input (including BILL_AMT, PAY_AMT) and computes derived features
+        before Pydantic validation checks for their existence.
+        """
+        if isinstance(data, dict):
+            # Check if we need to compute features. 
+            # If the raw columns (BILL_AMT...) are present, we should run feature engineering.
+            # Convert dict to DataFrame for feature engineering
+            try:
+                # We wrap in list to create a 1-row DataFrame
+                df_input = pd.DataFrame([data])
+                
+                # Run the centralized feature engineering logic
+                # This adds 'avg_bill_amt', etc. to the DataFrame if BILL_AMT exist
+                df_processed = compute_features(df_input)
+                
+                # Extract the computed features back to a dictionary
+                # We only want to update the data dict with the new columns
+                computed_row = df_processed.iloc[0].to_dict()
+                
+                # Update the original data dictionary
+                # This ensures keys like 'avg_bill_amt' now exist for Validation
+                data.update(computed_row)
+                
+            except Exception as e:
+                # In case of computation error, we let validation fail naturally 
+                # or we could raise a specific ValueError
+                raise ValueError(f"Feature engineering failed during validation: {str(e)}")
+                
+        return data
 
 class FinancialHealthRequest(CreditScoreRequest):
     pass
