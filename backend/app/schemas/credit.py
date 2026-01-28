@@ -49,13 +49,16 @@ class CreditScoreRequest(BaseModel):
                 df_processed = compute_features(df_input)
                 
                 # Extract the computed features back to a dictionary
-                # We only want to update the data dict with the new columns
                 computed_row = df_processed.iloc[0].to_dict()
                 
-                # Update the original data dictionary
-                # This ensures keys like 'avg_bill_amt' now exist for Validation
-                data.update(computed_row)
-                
+                # Update data with computed features ONLY IF they are not already provided
+                # This allows the User to provide pre-calculated features (like in the example request)
+                # without them being overwritten by 0s because BILL_AMT columns are missing.
+                for key, value in computed_row.items():
+                    if key not in data:
+                        data[key] = value
+                    # If key is already in data, we respect the user's input
+            
             except Exception as e:
                 # In case of computation error, we let validation fail naturally 
                 # or we could raise a specific ValueError

@@ -4,6 +4,9 @@ import pickle
 import os
 import pandas as pd
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 class CreditScoringModel:
     def __init__(self, model_path: str, explainer_path: str):
@@ -13,83 +16,108 @@ class CreditScoringModel:
         self.explainer = None
         self.features = None
         
-    def train(self, X: pd.DataFrame, y: pd.Series, feature_names: list, params: dict = None):
-        if params is None:
-            params = {
-                'n_estimators': 100, 
-                'max_depth': 4, 
-                'learning_rate': 0.1, 
-                'objective': 'binary:logistic',
-                'random_state': 42
-            }
-            
-        self.model = xgb.XGBClassifier(**params)
-        self.model.fit(X, y)
-        self.features = feature_names
-        
-        # Initialize Explainer
-        # TreeExplainer is best for XGBoost
-        self.explainer = shap.TreeExplainer(self.model)
-        
-        self.save()
-        
-    def save(self):
-        with open(self.model_path, 'wb') as f:
-            pickle.dump({'model': self.model, 'features': self.features}, f)
-        
-        with open(self.explainer_path, 'wb') as f:
-            pickle.dump(self.explainer, f)
-            
     def load(self):
         if not os.path.exists(self.model_path):
+            logger.error(f"Model file not found at {self.model_path}")
             return False
             
-        with open(self.model_path, 'rb') as f:
-            data = pickle.load(f)
-            self.model = data['model']
-            self.features = data['features']
+        try:
+            with open(self.model_path, 'rb') as f:
+                data = pickle.load(f)
+                
+            if isinstance(data, dict) and 'model' in data:
+                self.model = data['model']
+                self.features = data.get('features')
+                logger.info("Loaded model from dictionary container.")
+            else:
+                self.model = data
+                self.features = None
+                logger.info("Loaded raw model object.")
+                
+            # Try to populate features from model if possible and not set
+            if self.features is None and hasattr(self.model, 'feature_names'):
+                self.features = self.model.feature_names
             
-        if os.path.exists(self.explainer_path):
-            with open(self.explainer_path, 'rb') as f:
-                self.explainer = pickle.load(f)
-        
-        return True
+            # Load Explainer if exists
+            if os.path.exists(self.explainer_path):
+                try:
+                    with open(self.explainer_path, 'rb') as f:
+                        self.explainer = pickle.load(f)
+                        logger.info("Loaded SHAP explainer.")
+                except Exception as e:
+                    logger.warning(f"Failed to load explainer: {e}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}")
+            return False
     
     def predict(self, X: pd.DataFrame):
-        # Ensure column order matches training
-        if not hasattr(self, 'features') or not self.features:
-             self.features = X.columns.tolist()
-             
-        try:
-             X_ordered = X[self.features]
-        except KeyError as e:
-             raise ValueError(f"Model expects features {self.features} but got {X.columns}")
+        """
+        Predicts probabilities for the given DataFrame.
+        Enforces feature names if they are known by the model.
+        """
+        if self.model is None:
+            raise ValueError("Model is not loaded.")
 
-        # Use DMatrix with explicit feature names to ensure XGBoost accepts the input
-        # This resolves issues where the SKLearn wrapper complains about missing feature names in DataFrames
+        # If we know the features the model expects, strictly enforce them
+        if self.features:
+            missing_cols = set(self.features) - set(X.columns)
+            if missing_cols:
+                 raise ValueError(f"Input missing features expected by model: {missing_cols}")
+            
+            # Reorder to match model's expectation
+            X_input = X[self.features]
+        else:
+            # If we don't know model features, we rely on the caller (ScoringService) 
+            # to have provided the correct order.
+            X_input = X
+
         try:
-            dmat = xgb.DMatrix(X_ordered, feature_names=self.features)
-            probs = self.model.get_booster().predict(dmat)
-            return probs
+            # Check if it's an XGBoost Booster or valid Sklearn wrapper
+            if hasattr(self.model, 'predict_proba'):
+                # Sklearn-API
+                probs = self.model.predict_proba(X_input)
+                # Binary classification: return probability of class 1
+                return probs[:, 1]
+            elif hasattr(self.model, 'predict'):
+                # Might be Booster or Sklearn predict
+                # If Booster, it needs DMatrix
+                if isinstance(self.model, xgb.Booster):
+                    dmat = xgb.DMatrix(X_input, feature_names=self.features if self.features else None)
+                    return self.model.predict(dmat)
+                else:
+                    return self.model.predict(X_input)
+            else:
+                raise ValueError("Unknown model type")
+                
         except Exception as e:
-            # Fallback to standard predict_proba if direct booster access fails
-            print(f"Warning: Direct booster prediction failed: {e}. Retrying with wrapper.")
-            probs = self.model.predict_proba(X_ordered)
-            return probs[:, 1]
-    
+            logger.error(f"Prediction error: {e}")
+             # Last resort attempt: DMatrix
+            try:
+                dmat = xgb.DMatrix(X_input, feature_names=self.features if self.features else None)
+                if hasattr(self.model, 'get_booster'):
+                     return self.model.get_booster().predict(dmat)
+                return self.model.predict(dmat)
+            except Exception as e2:
+                raise ValueError(f"Model prediction failed: {e2}")
+
     def explain(self, X: pd.DataFrame):
-        X_ordered = X[self.features]
-        shap_values = self.explainer.shap_values(X_ordered)
+        if not self.explainer:
+            return None
+            
+        if self.features:
+            X_input = X[self.features]
+        else:
+            X_input = X
+            
+        shap_values = self.explainer.shap_values(X_input)
         
-        # Handling shape differences in shap versions/models
-        # For binary clf, it might be list of arrays or single array
         if isinstance(shap_values, list):
-            # Class 1
             sv = shap_values[1]
         else:
             sv = shap_values
             
         if len(sv.shape) > 1:
-            # multiple samples
             return sv[0]
         return sv
