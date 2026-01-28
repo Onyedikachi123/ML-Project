@@ -21,7 +21,7 @@ import {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Base URL for future API integration
-const API_BASE_URL = `${process.env.VITE_API_URL}/api/asset-management`;
+const API_BASE_URL = `${import.meta.env.VITE_API_BASE_URL}/api/asset-management`;
 
 // API service layer - ready for backend integration
 export const assetManagementApi = {

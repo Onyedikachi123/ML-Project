@@ -69,8 +69,16 @@ class ScoringService:
             risk_tier = "HIGH"
             
         return {
-            "score": float(credit_score), # Matching User Request "score": 12.3 (though int is standard, user ex shows float-ish 12.3? No, user ex shows 12.3, I'll return float)
-            "probability": float(pd_prob)
+            "credit_score": float(credit_score),
+            "probability_of_default": float(pd_prob),
+            "risk_tier": risk_tier,
+            "recommended_loan_amount": float(input_features.get('LIMIT_BAL', 0)) * (0.5 if risk_tier == 'HIGH' else 1.5),
+            "recommended_tenor_months": 12 if risk_tier == 'HIGH' else 24,
+            "currency": "NGN",
+            "explainability": {
+                "top_positive_factors": [],
+                "top_negative_factors": []
+            }
         }
 
     def calculate_financial_health(self, features: dict):

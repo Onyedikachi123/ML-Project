@@ -41,8 +41,8 @@ export const BackendIntegrationTest = () => {
             <div className="flex justify-between items-center mb-4">
                 <h3 className="font-semibold text-lg">Backend API Test</h3>
                 <span className={`px-2 py-1 rounded text-xs font-medium ${status === 'SUCCESS' ? 'bg-green-100 text-green-800' :
-                        status === 'ERROR' ? 'bg-red-100 text-red-800' :
-                            'bg-gray-100 text-gray-800'
+                    status === 'ERROR' ? 'bg-red-100 text-red-800' :
+                        'bg-gray-100 text-gray-800'
                     }`}>
                     {status}
                 </span>
@@ -50,7 +50,7 @@ export const BackendIntegrationTest = () => {
 
             <div className="space-y-4">
                 <p className="text-sm text-gray-500">
-                    Endpoint: <code className="bg-gray-100 p-1 rounded font-mono text-xs">{process.env.VITE_API_URL || 'Local'}/api/credit/score</code>
+                    Endpoint: <code className="bg-gray-100 p-1 rounded font-mono text-xs">{import.meta.env.VITE_API_BASE_URL || 'Local'}/api/credit/score</code>
                 </p>
 
                 <button

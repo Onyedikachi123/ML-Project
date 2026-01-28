@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Use import.meta.env for Vite
-const API_URL = import.meta.env.VITE_API_URL || "https://ml-project-ksuh.onrender.com";
+const API_URL = import.meta.env.VITE_API_BASE_URL;
 export const API_BASE_URL = `${API_URL}/api`;
 
 // Create axios instance
@@ -70,13 +70,38 @@ export const api = {
     async getCreditScore(data: CreditScoreRequest): Promise<CreditScoreResponse> {
         try {
             console.log("Sending credit score request to:", `${API_BASE_URL}/credit/score`);
-            const response = await apiClient.post<CreditScoreResponse>('/credit/score', data);
+            const response = await apiClient.post<any>('/credit/score', data);
+
+            // Adapter for backend response mismatch
+            // Backend currently returns { "score": 123, "probability": 0.12 }
+            if (response.data.score !== undefined && response.data.credit_score === undefined) {
+                const prob = response.data.probability || 0;
+                let calculatedRisk: 'LOW' | 'MEDIUM' | 'HIGH' = 'HIGH';
+                if (prob <= 0.25) calculatedRisk = 'LOW';
+                else if (prob <= 0.55) calculatedRisk = 'MEDIUM';
+
+                return {
+                    credit_score: response.data.score,
+                    probability_of_default: prob,
+                    risk_tier: calculatedRisk,
+                    recommended_loan_amount: 1000000, // Default/Mock
+                    recommended_tenor_months: 12,    // Default/Mock
+                    explainability: {
+                        top_positive_factors: [],
+                        top_negative_factors: []
+                    }
+                };
+            }
+
             return response.data;
         } catch (error: any) {
-            console.error('Error fetching credit score:', error);
+            console.error('API error:', error.response?.data);
             if (axios.isAxiosError(error)) {
-                const message = error.response?.data?.detail || error.message;
-                throw new Error(`Credit Score API Error: ${message}`);
+                throw new Error(
+                    error.response?.data?.detail?.map((d: any) => d.msg).join(", ")
+                    || error.response?.data?.detail
+                    || "Unknown API error"
+                );
             }
             throw new Error('Failed to fetch credit score');
         }
@@ -109,10 +134,13 @@ export const api = {
             const response = await apiClient.post<AssetRecommendationResponse>('/asset-management/recommendation', data);
             return response.data;
         } catch (error: any) {
-            console.error('Error fetching asset recommendation:', error);
+            console.error("API error:", error.response?.data);
             if (axios.isAxiosError(error)) {
-                const message = error.response?.data?.detail || error.message;
-                throw new Error(`Asset Recommendation API Error: ${message}`);
+                throw new Error(
+                    error.response?.data?.detail?.map((d: any) => d.msg).join(", ")
+                    || error.response?.data?.detail
+                    || "Unknown API error"
+                );
             }
             throw new Error('Failed to fetch asset recommendation');
         }
